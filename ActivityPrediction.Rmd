@@ -1,0 +1,128 @@
+---
+title: "ActivityPrediction"
+author: "ardecarlo"
+date: "Wednesday, September 17, 2014"
+output: html_document
+---
+##Summary
+
+Human Activity Recognition (HAR) has emerged as a key research area in the past few years in the pervasive computing research community. Moreover, devices such as Jawbone _Up_, Nike _FuelBand_, and _Fitbit_ allow people to collect large amounts of data about their personal activity relatively easily and inexpensively. One key application for these devices is exercise monitoring, where participants log how much of a particular activity they do. A much more challenging twist on exercise monitoring is monitoring how well the subjects do the exercise. 
+
+In this dataset, accelerometers on the belt, forearm, arm, and dumbbell collected data on 6 participants as they performed barbell lifts correctly and incorrectly in 5 different ways[1]. We evaluated a neural network, random forest, and boosted tree in identifying activity quality. The boosted tree has an accuracy of 76.0%, followed by the neural network at 53.9%, and the random forest was unable to complete because of memory issues. Cross-validation confirmed these accuracies. The boosted tree was selected as our final predictor, and identified 15 out of the 20 test cases correctly.
+
+##Analysis
+
+###Required Packages
+The following packages are required:
+```{r eval=FALSE}
+library(caret)
+library(caTools)
+library(randomForest)
+library(doParallel) 
+```
+
+doParallel is required because the machine learning algorithms can be very computationally intensive, and should be split across multiple cores wherever possible to decrease computational time.
+
+###Data Loading and Pre-Processing
+
+We load the data from pml-testing.csv and pml-training.csv:
+
+```{r eval = FALSE}
+test_raw <- read.csv("pml-testing.csv", na.strings = c("NA", ""))
+train_raw <- read.csv("pml-training.csv", na.strings = c("NA", ""))
+```
+
+Next, we only use variables that have no missing values in the training set. In this training set, 60 variables have no missing values, 100 variables have >19000 missing values, and no variables have between 0 and 19000 values missing.
+
+```{r eval = FALSE}
+good_idx <- apply(train_raw, 2, function(x) { sum(is.na(x)) }) == 0
+test_raw2 <- test_raw[,good_idx]
+train_raw2 <- train_raw[,good_idx]
+```
+
+In order to reduce overfitting-related complications, we eliminate irrelevant variables. With the exception of user_name, the first six columns in our datasets are not necessary, and can complicate the machine learning algorithm, so these are eliminated:
+
+```{r eval=FALSE}
+train_raw2 <- train_raw2[,c(2,7:length(names(train_raw2)))]
+test_raw2 <- test_raw2[,c(2,7:length(names(test_raw2)))]
+```
+
+Next, we make sure the user_name column in the testing and training datasets is set to numeric:
+
+```{r eval=FALSE}
+test_raw2$user_name <- as.numeric(test_raw2$user_name)
+train_raw2$user_name <- as.numeric(train_raw2$user_name)
+```
+
+### Testing, Training, and Validation
+
+In order to perform basic cross-validation on our data, we reserve a random partition of about 1/5 of our training data (or ~4000 samples) as a validation dataset.
+
+```{r eval = FALSE}
+set.seed(456)
+inTrain  <-  createDataPartition(train_raw2$classe, p = 4/5)[[1]]
+training <- train_raw2[inTrain, ]
+validation <- train_raw2[-inTrain, ]
+```
+
+### Principal Component Analysis (PCA)
+
+Next, we perform principal component analysis (PCA), and select only 
+those components that total >80% of the variance. A quick inspection shows that the first 13 components will be sufficient. We store these 13 components, along with the 'classe' (result) value from the training dataset, in a dataframe called training2:
+
+```{r eval = FALSE}
+PCA <- prcomp(training[, 1:54], retx=TRUE, center=TRUE, scale = TRUE)
+predictors <- PCA$x[, 1:13] 
+outcome  <- training[,55]
+training2  <- data.frame(outcome, predictors)
+```
+
+We repeat this process on the validation and testing datasets, using the same principal components from the training set:
+
+```{r eval=FALSE}
+#validation
+predictors <- predict(PCA, validation)  #rotated data using the same PCA
+predictors <- predictors[, 1:13]
+outcome  <- validation[,55]
+validation2  <- data.frame(outcome, predictors)
+#testing
+predictors <- predict(PCA,test_raw2)  #rotated data using the same PCA
+predictors <- predictors[, 1:13]
+outcome  <- test_raw2[,55]
+testing2  <- data.frame(outcome, predictors)
+```
+
+### The Predictor
+
+We create a predictor model using a random forest, neural network, and boosted tree. It is important to run these across multiple cores, because the machine learning algorithms can be very computationally intensive. 
+
+```{r eval=FALSE}
+# make a model of random forest, neural network, and boosted tree
+cl <- makeCluster(detectCores()-1) 
+registerDoParallel(cl)
+model_rf <- train(outcome ~ ., method = "rf", data = training2, prox = TRUE)
+model_nnet <- train(outcome ~ ., method = "nnet", data = training2)
+model_gbm <- train(outcome ~ ., method = "gbm", data = training2)
+stopCluster(cl)
+```
+
+The boosted tree has an accuracy of 76.0%, followed by the neural network at 53.9%. Because of memory issues, we were unable to create and test the random forest model. 
+
+We validated the boosted tree and neural network as follows, to verify the absence of Type III errors (hypotheses suggested by the data):
+
+```{r eval=FALSE}
+validate_gbm<- predict(model_gbm,validation2)
+validate_gbm <- confusionMatrix(validation2$outcome, validate_gbm)
+validate_nnet<- predict(model_nnet,validation2)
+validate_nnet <- confusionMatrix(validation2$outcome, validate_nnet)
+```
+The boosted tree has an accuracy of 76.7% over the validation set, and the neural network has an accuracy of 54.3%, indicating that our accuracy estimates from the training set are accurate.
+
+Based on the neural network's subpar performance, and the absence of any random forest model, we did not combine the predictors. The boosted tree was selected as the final predictor model, and classified 15 out of the 20 test cases correctly.
+
+##Conclusions
+
+We evaluated a random forest, boosted tree, and neural network as our three predictor models. Although the random forest is usually one of the best predictors available, it was unable to run due to memory issues. The remaining two predictors (boosted tree and neural network) showed accuracies of 76.0% and 53.9% respectively on the test set, and 76.7% and 54.3% on the validation set. The boosted tree was selected as the final predictor model, and identified 15 out of the 20 test cases correctly.
+
+##References
+[1] Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012.
